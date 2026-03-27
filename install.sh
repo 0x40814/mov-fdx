@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 APP_NAME="O11V4"
+INSTALLER_VERSION="v3"
 INSTALL_DIR="/opt/o11"
 SERVICE_NAME="o11v4"
 SERVICE_FILE="${SERVICE_NAME}.service"
@@ -37,9 +38,9 @@ else
 fi
 
 print_banner() {
-  cat <<'EOF'
+  cat <<EOF
 ==================================================
-  O11V4 Installer
+  ${APP_NAME} Installer ${INSTALLER_VERSION}
 ==================================================
 EOF
 }
@@ -72,15 +73,21 @@ fail() {
 
 run_step() {
   local message="$1"
+  local status=0
   shift
 
   info "$message"
-  if ( "$@" ) >>"$LOG_FILE" 2>&1; then
+  set +e
+  "$@" >>"$LOG_FILE" 2>&1
+  status=$?
+  set -e
+
+  if [[ $status -eq 0 ]]; then
     success "$message"
   else
     error "$message"
     tail -n 20 "$LOG_FILE" >&2 || true
-    exit 1
+    exit "$status"
   fi
 }
 
@@ -291,6 +298,17 @@ install_python_packages() {
 }
 
 sync_project_files() {
+  if [[ -z "${PACKAGE_SOURCE_DIR:-}" ]]; then
+    error "Diretorio do pacote nao foi definido."
+    return 1
+  fi
+
+  if [[ "$PACKAGE_SOURCE_DIR" == "/" ]]; then
+    error "Diretorio do pacote invalido: /"
+    return 1
+  fi
+
+  verify_package_dir "$PACKAGE_SOURCE_DIR"
   mkdir -p "$INSTALL_DIR"
 
   if [[ "$PACKAGE_SOURCE_DIR" == "$INSTALL_DIR" ]]; then
