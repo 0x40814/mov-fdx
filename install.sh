@@ -75,7 +75,7 @@ run_step() {
   shift
 
   info "$message"
-  if "$@" >>"$LOG_FILE" 2>&1; then
+  if ( "$@" ) >>"$LOG_FILE" 2>&1; then
     success "$message"
   else
     error "$message"
@@ -130,28 +130,16 @@ zip_url_configured() {
   [[ -n "$PACKAGE_ZIP_URL" && "$PACKAGE_ZIP_URL" != "https://SEU-LINK-DO-ZIP-AQUI" ]]
 }
 
-extract_zip_with_python() {
+zip_requires_password() {
   local zip_path="$1"
-  O11_ZIP_PASSWORD_VALUE="${ZIP_PASSWORD:-}" python3 - "$zip_path" "$TEMP_EXTRACT_DIR" <<'PY'
-import os
+  python3 - "$zip_path" <<'PY'
 import sys
 import zipfile
 
 zip_path = sys.argv[1]
-out_dir = sys.argv[2]
-password = os.environ.get("O11_ZIP_PASSWORD_VALUE", "")
-pwd = password.encode() if password else None
-
-os.makedirs(out_dir, exist_ok=True)
-
-try:
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(out_dir, pwd=pwd)
-except RuntimeError as exc:
-    msg = str(exc).lower()
-    if "password" in msg or "encrypted" in msg:
-        raise SystemExit(42)
-    raise
+with zipfile.ZipFile(zip_path) as zf:
+    encrypted = any(info.flag_bits & 0x1 for info in zf.infolist())
+raise SystemExit(0 if encrypted else 1)
 PY
 }
 
@@ -171,42 +159,36 @@ prompt_zip_password() {
   fi
 }
 
+extract_zip_with_7z() {
+  local zip_path="$1"
+
+  if [[ -n "${ZIP_PASSWORD:-}" ]]; then
+    7z x -y "-p${ZIP_PASSWORD}" "-o${TEMP_EXTRACT_DIR}" "$zip_path"
+  else
+    7z x -y "-o${TEMP_EXTRACT_DIR}" "$zip_path"
+  fi
+}
+
 extract_zip_contents() {
   local zip_path="$1"
-  local status=0
 
   rm -rf "$TEMP_EXTRACT_DIR"
   mkdir -p "$TEMP_EXTRACT_DIR"
 
-  if extract_zip_with_python "$zip_path"; then
-    return 0
+  if zip_requires_password "$zip_path" && [[ -z "${ZIP_PASSWORD:-}" ]]; then
+    prompt_zip_password
   fi
 
-  status=$?
-  if [[ $status -ne 42 ]]; then
-    return "$status"
+  if extract_zip_with_7z "$zip_path"; then
+    return 0
   fi
 
   if [[ -n "${ZIP_PASSWORD:-}" ]]; then
     error "A senha informada em O11_ZIP_PASSWORD esta incorreta."
-    exit 1
+    return 1
   fi
 
-  prompt_zip_password
-  rm -rf "$TEMP_EXTRACT_DIR"
-  mkdir -p "$TEMP_EXTRACT_DIR"
-
-  if extract_zip_with_python "$zip_path"; then
-    return 0
-  fi
-
-  status=$?
-  if [[ $status -eq 42 ]]; then
-    error "Senha do ZIP invalida."
-    exit 1
-  fi
-
-  return "$status"
+  return 1
 }
 
 verify_package_dir() {
@@ -410,7 +392,7 @@ main() {
 
   section "Pacotes do sistema"
   run_step "Atualizando a lista de pacotes" apt-get update -y
-  run_step "Instalando dependencias basicas" apt-get install -y ca-certificates curl ffmpeg gnupg openssl python3 python3-pip software-properties-common unzip
+  run_step "Instalando dependencias basicas" apt-get install -y ca-certificates curl ffmpeg gnupg openssl p7zip-full python3 python3-pip software-properties-common unzip
   run_shell_step "Configurando repositorio Node.js LTS" "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -"
   run_step "Instalando Node.js" apt-get install -y nodejs
 
